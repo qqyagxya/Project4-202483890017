@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import RPi.GPIO as GPIO
+import time
+
+# ===================== 硬件引脚定义 =====================
+# 超声波模块（HC-SR04）
+TRIG = 23   # 发射引脚
+ECHO = 24   # 接收引脚
+
+# 电机驱动（L298N 或类似）
+# 左电机
+ENA = 12     # PWM调速引脚（使能）
+IN1 = 5
+IN2 = 6
+# 右电机
+ENB = 13     # PWM调速引脚（使能）
+IN3 = 20
+IN4 = 21
+
+# ===================== GPIO 初始化 =====================
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+
+# 超声波引脚
+GPIO.setup(TRIG, GPIO.OUT)
+GPIO.setup(ECHO, GPIO.IN)
+
+# 电机引脚
+GPIO.setup(IN1, GPIO.OUT)
+GPIO.setup(IN2, GPIO.OUT)
+GPIO.setup(IN3, GPIO.OUT)
+GPIO.setup(IN4, GPIO.OUT)
+GPIO.setup(ENA, GPIO.OUT)
+GPIO.setup(ENB, GPIO.OUT)
+
+# 初始化PWM（频率1kHz）
+pwm_left = GPIO.PWM(ENA, 1000)
+pwm_right = GPIO.PWM(ENB, 1000)
+pwm_left.start(0)   # 占空比0%即停止
+pwm_right.start(0)
+
+# ===================== 超声波测距函数 =====================
+def get_distance():
+    """返回当前距离（单位：cm），若超时则返回极大值（999）"""
+    # 发送10us高脉冲触发
+    GPIO.output(TRIG, False)
+    time.sleep(0.000002)
+    GPIO.output(TRIG, True)
+    time.sleep(0.000010)
+    GPIO.output(TRIG, False)
+
+    # 等待ECHO变为高电平（超时处理）
+    timeout = 0.1  # 100ms
+    start_time = time.time()
+    while GPIO.input(ECHO) == 0:
+        if time.time() - start_time > timeout:
+            return 999
+    pulse_start = time.time()
+
+    # 等待ECHO变为低电平
+    while GPIO.input(ECHO) == 1:
+        if time.time() - start_time > timeout:
+            return 999
+    pulse_end = time.time()
+
+    # 计算脉冲持续时间并转换为距离（声速343m/s，往返）
+    pulse_duration = pulse_end - pulse_start
+    distance = pulse_duration * 34300 / 2  # cm
+    return distance
+
+# ===================== 电机控制函数 =====================
+def forward(speed=30):
+    """前进，speed为占空比（0~100）"""
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
+
+def backward(speed=30):
+    """后退"""
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
+
+def turn_left(speed=30):
+    """原地左转（左轮反转，右轮正转）"""
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)   # 左轮后退
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)    # 右轮前进
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
+
+def turn_right(speed=30):
+    """原地右转"""
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)    # 左轮前进
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)   # 右轮后退
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
+
+def stop():
+    """停止所有电机"""
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.LOW)
+    pwm_left.ChangeDutyCycle(0)
+    pwm_right.ChangeDutyCycle(0)
+
+# ===================== 主程序 =====================
+def main():
+    try:
+        print("小车避障程序启动，按Ctrl+C退出")
+        # 短暂的等待传感器稳定
+        time.sleep(1)
+
+        while True:
+            # 测量距离
+            dist = get_distance()
+            print(f"距离：{dist:.1f} cm")
+
+            if dist < 20:   # 障碍物小于20cm
+                print("前方有障碍，执行右转避障")
+                # 先停止，再原地右转（可改为左转，或随机）
+                stop()
+                time.sleep(0.1)
+                turn_right(speed=25)
+                time.sleep(0.5)      # 转动时间，根据实际情况调整
+                # 转完后继续前进
+            else:
+                forward(speed=25)
+
+            # 控制循环频率，避免过于频繁
+            time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print("\n程序被用户中断")
+    finally:
+        stop()
+        pwm_left.stop()
+        pwm_right.stop()
+        GPIO.cleanup()
+        print("GPIO清理完毕，程序退出")
+
+if __name__ == "__main__":
+    main()
